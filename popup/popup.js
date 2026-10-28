@@ -60,8 +60,9 @@ function render(status) {
   }
 
   const toggle = el('toggle');
-  toggle.disabled = !isHttp;
-  toggle.textContent = match ? '停用本站点' : '启用本站点';
+  toggle.disabled = !isHttp || !prefs.enabled;
+  if (!prefs.enabled) toggle.textContent = '总开关已关闭';
+  else toggle.textContent = match ? '停用本站点' : '启用本站点';
 
   currentMatch = match;
   currentTab = { id: status.tabId, url };
@@ -98,6 +99,15 @@ async function toggleSite() {
   if (!result || !result.ok) {
     el('state').textContent = '操作失败：' + ((result && result.error) || '未知错误');
     el('toggle').disabled = false;
+    return;
+  }
+
+  if (!result.changed) {
+    // 站点没有被增删（已经处于目标状态，或者被一条更宽的规则盖住）
+    el('toggle').disabled = false;
+    el('state').textContent = result.covered
+      ? '本站点由已有的规则「' + result.covered + '」控制，请到设置页修改'
+      : '本站点状态没有变化';
     return;
   }
 

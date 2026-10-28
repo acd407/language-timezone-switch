@@ -38,13 +38,13 @@ function currentForm() {
 }
 
 async function save(reason) {
-  if (saving) return;
+  if (saving) return false;
   const form = currentForm();
 
   if (form.timezone && !ltsIsTimezone(form.timezone)) {
-    setStatus('时区无效：' + form.timezone, 'bad');
+    setStatus('时区无效：' + form.timezone + '（本次没有保存任何改动）', 'bad');
     tzInput.focus();
-    return;
+    return false;
   }
 
   saving = true;
@@ -54,9 +54,18 @@ async function save(reason) {
     await api.storage.local.set(form);
     const diagnostics = await sendMessage({ method: 'lts-rerun' });
     renderDiagnostics(diagnostics);
-    setStatus(reason || '已保存，配置已应用', 'good');
+
+    // 个别站点行有问题不影响其它行，但得告一声
+    const broken = ltsCompileSites(form.sites).filter(site => site.errors.length);
+    if (broken.length) {
+      setStatus((reason || '已保存') + '，但有 ' + broken.length + ' 行站点配置需要修正', 'bad');
+    } else {
+      setStatus(reason || '已保存，配置已应用', 'good');
+    }
+    return true;
   } catch (e) {
     setStatus('保存失败：' + ((e && e.message) || e), 'bad');
+    return false;
   } finally {
     saving = false;
   }
@@ -90,6 +99,8 @@ function fillTimezones() {
     option.value = tz;
     fragment.appendChild(option);
   }
+  // init() 可能被调多次（比如恢复默认），先清空避免重复项
+  list.replaceChildren();
   list.appendChild(fragment);
 }
 
@@ -187,6 +198,12 @@ function renderSitesPreview() {
       note.textContent = '⚠ ' + error;
       li.appendChild(note);
     }
+    for (const warning of site.warnings || []) {
+      const note = document.createElement('span');
+      note.className = 'note';
+      note.textContent = 'ℹ ' + warning;
+      li.appendChild(note);
+    }
 
     list.appendChild(li);
   }
@@ -214,12 +231,15 @@ function renderDiagnostics(diagnostics) {
 async function renderPermission() {
   const result = await sendMessage({ method: 'lts-permission-check' });
   if (!result || result.granted) return;
+  if (document.getElementById('permission-box')) return; // init() 可能被调多次
 
   const box = document.createElement('p');
   box.className = 'hint bad';
+  box.id = 'permission-box';
   box.textContent = '⚠ 扩展还没有「访问所有网站」的权限，内容脚本无法注入。';
 
   const button = document.createElement('button');
+  button.id = 'permission-grant';
   button.textContent = '授予权限';
   button.style.marginTop = '8px';
   button.addEventListener('click', async () => {
@@ -263,9 +283,14 @@ async function init() {
 
 /* ------------------------------------------------------------------ 事件 */
 
-enabledInput.addEventListener('change', () => {
+enabledInput.addEventListener('change', async () => {
   renderEnabledLabel();
-  save(enabledInput.checked ? '已启用' : '已停用');
+  const ok = await save(enabledInput.checked ? '已启用' : '已停用');
+  // 保存失败（比如时区写错了）时把开关拨回去，否则界面与存储不同步
+  if (!ok) {
+    enabledInput.checked = !enabledInput.checked;
+    renderEnabledLabel();
+  }
 });
 
 rewriteInput.addEventListener('change', () => save());
