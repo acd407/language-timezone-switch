@@ -14,8 +14,13 @@ const LTS_DEFAULTS = {
   rewriteHeader: true
 };
 
-/* 站点列表里允许的 URL scheme */
-const LTS_SCHEMES = ['*', 'http', 'https', 'file', 'ftp', 'ws', 'wss'];
+/* 站点列表里允许的 URL scheme。
+   只列内容脚本（match pattern）真正支持的四个：ws/wss/ftp 写进去 Chrome 会整条注册失败，
+   而且没有标签页 URL 会是 ws:// / ftp://，属于纯死配置，直接拒绝更安全。 */
+const LTS_SCHEMES = ['*', 'http', 'https', 'file'];
+
+/* match pattern 允许的 host：ASCII 字母/数字/连字符组成的域名（国际化域名请写 punycode） */
+const LTS_HOST_RE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*$/;
 
 /* ------------------------------------------------------------------ 语言 */
 
@@ -43,7 +48,9 @@ function ltsToAcceptLanguage(languages) {
   return list
     .map((lang, i) => {
       if (i === 0) return lang;
-      const q = (list.length - i) / list.length;
+      // 从 0.9 递减（Chrome 自己发的是 en-US,en;q=0.9 这种形态）。
+      // 之前用 (n-i)/n，两个语言时第二项只有 q=0.5，和主流写法差得太远。
+      const q = Math.max(0.1, 1 - i / 10);
       return lang + ';q=' + q.toFixed(digits);
     })
     .join(',');
@@ -117,71 +124,131 @@ function ltsTimezones() {
  * 把用户写的站点转换成 match pattern。
  *   example.com            → *://*.example.com/*
  *   example.com/path       → *://*.example.com/path*
+ *   example.com:8080       → *://*.example.com/*（port 里返回 8080）
  *   https://a.example.com  → https://*.a.example.com/*
  *   *                      → *://* /*
  *   file:///tmp/x.html     → file:///tmp/x.html*
+ *
+ * 返回 { pattern, port, error }。pattern 为 null 时 error 里是给人看的原因——
+ * 后台是拿这个字符串直接调 scripting.registerContentScripts 的，
+ * 一个非法 pattern 会让整批注册全部失败，所以必须在这里就把垃圾挡掉。
+ *
+ * 端口不会进 pattern：Chrome 的 match pattern 不接受端口（会报 Invalid port），
+ * 所以注入无法按端口区分，只能把端口单独返回给调用方去做提示。
  */
-function ltsToMatchPattern(input) {
-  let s = String(input == null ? '' : input).trim().replace(/\s+/g, '');
-  if (!s) return null;
+function ltsBuildMatchPattern(input) {
+  const compact = String(input == null ? '' : input).trim().replace(/\s+/g, '');
+  if (!compact) return { pattern: null, port: '', error: '站点为空' };
 
   let scheme = '*';
-  const m = /^([A-Za-z*]+):\/\//.exec(s);
+  let rest = compact;
+  const m = /^([A-Za-z*]+):\/\//.exec(compact);
   if (m) {
     scheme = m[1].toLowerCase();
-    if (LTS_SCHEMES.indexOf(scheme) === -1) return null;
-    s = s.slice(m[0].length);
+    if (LTS_SCHEMES.indexOf(scheme) === -1) {
+      return {
+        pattern: null, port: '',
+        error: '不支持的 scheme "' + m[1] + '://"（只支持 http、https、file）'
+      };
+    }
+    rest = compact.slice(m[0].length);
   }
 
+  if (rest.charAt(0) === '[') return { pattern: null, port: '', error: '暂不支持 IPv6 字面量' };
+
   if (scheme === 'file') {
-    let path = s || '/';
+    let path = rest || '/';
     if (path.charAt(0) !== '/') path = '/' + path;
     if (path.indexOf('*') === -1) path += '*';
-    return 'file://' + path;
+    return { pattern: 'file://' + path, port: '', error: '' };
   }
 
   let path = '/*';
-  const slash = s.indexOf('/');
+  const slash = rest.indexOf('/');
   if (slash !== -1) {
-    path = s.slice(slash);
-    s = s.slice(0, slash);
+    path = rest.slice(slash);
+    rest = rest.slice(0, slash);
   }
 
-  let host = s.toLowerCase().replace(/:\d+$/, '').replace(/^\.+/, '');
-  if (!host) return null;
+  let port = '';
+  const colon = rest.indexOf(':');
+  if (colon !== -1) {
+    const maybePort = rest.slice(colon + 1);
+    if (maybePort.indexOf('@') !== -1) {
+      return { pattern: null, port: '', error: '不支持带账号密码的 URL（写裸域名即可）' };
+    }
+    if (!/^\d{1,5}$/.test(maybePort) || Number(maybePort) > 65535) {
+      return { pattern: null, port: '', error: '端口不合法："' + maybePort + '"' };
+    }
+    port = String(Number(maybePort));
+    rest = rest.slice(0, colon);
+  }
 
-  // IP 地址前面不能加 *.（match pattern 不允许 *.1.2.3.4，会直接报错）
-  const isIp = /^\d{1,3}(?:\.\d{1,3}){3}$/.test(host);
-  if (!isIp && host !== '*' && host.indexOf('*.') !== 0) host = '*.' + host;
+  let host = rest.toLowerCase().replace(/^\.+/, '').replace(/\.+$/, '');
+  if (!host) return { pattern: null, port, error: '缺少域名' };
+
+  if (host !== '*') {
+    const wildcard = host.indexOf('*.') === 0;
+    const base = wildcard ? host.slice(2) : host;
+    if (!base) return { pattern: null, port, error: '缺少域名' };
+    if (base.indexOf('*') !== -1) return { pattern: null, port, error: '通配符只能写成 *.example.com' };
+
+    // IP 地址前面不能加 *.（match pattern 不允许 *.1.2.3.4）
+    const isIp = /^\d{1,3}(?:\.\d{1,3}){3}$/.test(base);
+    if (isIp) {
+      if (wildcard) return { pattern: null, port, error: 'IP 地址不能加 "*." 通配' };
+      host = base;
+    } else if (!LTS_HOST_RE.test(base)) {
+      return {
+        pattern: null, port,
+        error: '域名里有非法字符："' + base + '"（国际化域名请写 punycode）'
+      };
+    } else {
+      host = '*.' + base;
+    }
+  }
 
   if (path === '' || path === '/') path = '/*';
   else if (path.indexOf('*') === -1) path += '*';
 
-  return scheme + '://' + host + path;
+  return { pattern: scheme + '://' + host + path, port, error: '' };
 }
 
-/** match pattern → 用于在后台判断「当前标签页 URL 是否命中」的正则 */
+/** 同上，但只要 pattern（解析失败返回 null） */
+function ltsToMatchPattern(input) {
+  return ltsBuildMatchPattern(input).pattern;
+}
+
+/**
+ * match pattern → 用于在后台判断「当前标签页 URL 是否命中」的正则。
+ * 注意：只有 scheme/host 做 ASCII 大小写折叠，path 保持区分大小写——
+ * Chrome 的 match pattern 就是这么匹配的，之前统一加 /i 会让 /Admin 命中 /ADMIN，
+ * 于是徽标说“已切换”而页面实际没被注入。
+ */
 function ltsPatternToRegExp(pattern) {
-  const m = /^(\*|https?|wss?|ftp|file):\/\/(\*|\*\.[^/]+|[^/]*)(\/.*)$/.exec(pattern);
+  const m = /^(\*|https?|wss?|ftp|file):\/\/(\*|\*\.[^/:]+|[^/:]*)(?::(\d+))?(\/.*)$/.exec(pattern);
   if (!m) return null;
 
   const scheme = m[1];
   const host = m[2];
-  const path = m[3];
+  const port = m[3];
+  const path = m[4];
 
   const escape = s => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
   const glob = s => escape(s).replace(/\*/g, '.*');
+  const foldCase = s => s.replace(/[A-Za-z]/g, c => '[' + c.toUpperCase() + c.toLowerCase() + ']');
 
-  const schemeRe = scheme === '*' ? 'https?' : escape(scheme);
+  const schemeRe = scheme === '*' ? foldCase('https?') : foldCase(escape(scheme));
   let hostRe = '';
   if (scheme !== 'file') {
     if (host === '*') hostRe = '[^/]+';
-    else if (host.indexOf('*.') === 0) hostRe = '(?:[^/]+\\.)?' + escape(host.slice(2));
-    else hostRe = escape(host);
+    else if (host.indexOf('*.') === 0) hostRe = '(?:[^/]+\\.)?' + foldCase(escape(host.slice(2)));
+    else hostRe = foldCase(escape(host));
   }
+  const portRe = port ? ':' + port : '(?::\\d+)?';
 
   try {
-    return new RegExp('^' + schemeRe + '://' + hostRe + '(?::\\d+)?' + glob(path) + '$', 'i');
+    return new RegExp('^' + schemeRe + '://' + hostRe + portRe + glob(path) + '$');
   } catch (e) {
     return null;
   }
@@ -189,7 +256,7 @@ function ltsPatternToRegExp(pattern) {
 
 /** match pattern 里的域名（给 declarativeNetRequest 用） */
 function ltsPatternDomains(pattern) {
-  const m = /^(\*|https?|wss?|ftp):\/\/(\*|\*\.[^/]+|[^/]+)\//.exec(pattern);
+  const m = /^(\*|https?|wss?|ftp):\/\/(\*|\*\.[^/:]+|[^/:]+)(?::\d+)?\//.exec(pattern);
   if (!m) return [];
   const host = m[2];
   if (!host || host === '*') return [];
@@ -212,12 +279,20 @@ function ltsParseSite(raw) {
   const langPart = parts[2] || '';
 
   const errors = [];
-  const pattern = ltsToMatchPattern(sitePart);
-  if (!pattern) {
+  const warnings = [];
+  if (parts.length > 3) warnings.push('第 4 段起被忽略（每行最多：站点 | 时区 | 语言）');
+
+  const built = ltsBuildMatchPattern(sitePart);
+  if (!built.pattern) {
+    errors.unshift(built.error || '站点格式无法解析');
     return {
       raw: line, pattern: '', regex: null, domains: [],
-      timezone: '', languages: [], errors: ['站点格式无法解析']
+      timezone: '', languages: [], overridden: false, errors, warnings
     };
+  }
+  const pattern = built.pattern;
+  if (built.port) {
+    warnings.push('端口 ' + built.port + ' 会被忽略：浏览器不允许按端口注入内容脚本');
   }
 
   let timezone = '';
@@ -236,7 +311,9 @@ function ltsParseSite(raw) {
     domains: ltsPatternDomains(pattern),
     timezone,
     languages,
-    errors
+    overridden: Boolean(timezone || languages.length),
+    errors,
+    warnings
   };
 }
 

@@ -147,6 +147,14 @@ check('setHours(0) 后时刻减少 12 小时',
   '(d => (d.setHours(0), d.getTime()))(new Date(Date.UTC(2023,9,28,3,0)))', Date.UTC(2023, 9, 27, 15, 0));
 check('setTime 不受时区影响',
   '(d => (d.setTime(0), d.getTime()))(new Date())', 0);
+check('setTime 之后本地 getter 跟着更新（不再返回缓存值）',
+  '(d => { d.getHours(); d.setTime(Date.UTC(2024,0,1,0,0)); return [d.getHours(), d.getDate()]; })(new Date(Date.UTC(2023,9,28,3,0)))',
+  [9, 1]);
+check('setUTCHours 之后本地 getter 跟着更新',
+  '(d => { d.getHours(); d.setUTCHours(0,0,0,0); return d.getHours(); })(new Date(Date.UTC(2023,9,28,3,0)))',
+  9);
+check('setYear 保留 0-99 映射到 19xx 的语义',
+  '(d => (d.setYear(99), d.getFullYear()))(new Date(Date.UTC(2023,9,28,3,0)))', 1999);
 check('setMonth(0) 后月份为 0',
   '(d => (d.setMonth(0), d.getMonth()))(new Date(Date.UTC(2023,9,28,3,0)))', 0);
 
@@ -160,6 +168,17 @@ check('无时区的 ISO 时间按本地时间解析',
   'new Date("2023-10-28T12:00:00").getHours()', 12);
 check('无时区的 ISO 时间换算成 03:00Z',
   'new Date("2023-10-28T12:00:00").getTime() === Date.UTC(2023, 9, 28, 3, 0)', true);
+check('带 GMT 的 RFC 2822 串按绝对时间解析',
+  'new Date("Sat, 28 Oct 2023 03:00:00 GMT").getTime() === Date.UTC(2023, 9, 28, 3, 0)', true);
+check('带 UTC 的英文日期按绝对时间解析',
+  'new Date("October 28, 2023 03:00:00 UTC").getTime() === Date.UTC(2023, 9, 28, 3, 0)', true);
+check('toUTCString 往返不丢时刻',
+  'new Date(new Date(Date.UTC(2023,9,28,3,0)).toUTCString()).getTime() === Date.UTC(2023,9,28,3,0)', true);
+check('Date.parse 与 new Date(string) 给出一致结果',
+  '["2023-10-28T12:00:00", "Sat, 28 Oct 2023 03:00:00 GMT", "2023-10-28", "October 28, 2023 03:00:00 UTC"].every(s => Date.parse(s) === new Date(s).getTime())',
+  true);
+check('Date.parse 的名字和长度像原生',
+  '[Date.parse.name, Date.parse.length]', ['parse', 1]);
 
 console.log('\n[4] Intl / navigator / locale');
 
@@ -170,6 +189,8 @@ check('显式指定的时区不被覆盖',
 check('navigator.language', 'navigator.language', 'ja-JP');
 check('navigator.languages', 'navigator.languages.join(",")', 'ja-JP,ja,en');
 check('navigator.languages 已冻结', 'Object.isFrozen(navigator.languages)', true);
+check('navigator.languages 每次返回新数组（与原生一致）',
+  'navigator.languages !== navigator.languages', true);
 check('Number#toLocaleString 默认用目标语言',
   '(1234.5).toLocaleString()', (1234.5).toLocaleString('ja-JP'));
 check('Date#toLocaleString 显式语言仍是显式语言',
@@ -197,6 +218,9 @@ check('纽约 1 月 = 300（EST，UTC-5）', 'new Date("2023-01-15T12:00:00Z").g
 check('纽约 7 月 = 240（EDT，UTC-4）', 'new Date("2023-07-15T12:00:00Z").getTimezoneOffset()', 240);
 check('纽约 1 月本地小时 = 7', 'new Date("2023-01-15T12:00:00Z").getHours()', 7);
 check('纽约 7 月本地小时 = 8', 'new Date("2023-07-15T12:00:00Z").getHours()', 8);
+check('跨夏令时的 setHours 落在正确时刻（03:00 EDT = 07:00Z）',
+  '(d => { d.setHours(3, 0, 0, 0); return d.toISOString(); })(new Date(Date.UTC(2023,2,12,6,30)))',
+  '2023-03-12T07:00:00.000Z');
 check('跨夏令时切换的两个月日期不对调',
   '[new Date("2023-03-12T06:59:00Z").getHours(), new Date("2023-03-12T07:01:00Z").getHours()]', [1, 3]);
 
@@ -240,7 +264,23 @@ check('裸域名 → 带子域的通配', 'ltsToMatchPattern("example.com")', '*
 check('带路径 → 前缀匹配', 'ltsToMatchPattern("example.com/foo")', '*://*.example.com/foo*');
 check('显式 scheme 保留', 'ltsToMatchPattern("https://a.example.com")', 'https://*.a.example.com/*');
 check('* → 全站', 'ltsToMatchPattern("*")', '*://*/*');
-check('端口被剥掉', 'ltsToMatchPattern("example.com:8080")', '*://*.example.com/*');
+check('端口不进 pattern（Chrome 报 Invalid port）', 'ltsToMatchPattern("example.com:8080")', '*://*.example.com/*');
+check('端口以警告形式告知，不静默丢弃',
+  '(() => { const s = ltsParseSite("example.com:8080"); return [s.errors.length, s.warnings.length, s.warnings[0].indexOf("8080") !== -1]; })()',
+  [0, 1, true]);
+check('ws:// 被拒绝（内容脚本不支持这个 scheme）', 'ltsToMatchPattern("ws://example.com")', null);
+check('ftp:// 被拒绝', 'ltsToMatchPattern("ftp://example.com")', null);
+check('带账号密码的 URL 被拒绝', 'ltsToMatchPattern("http://user:pass@example.com")', null);
+check('IPv6 字面量被拒绝', 'ltsToMatchPattern("[::1]")', null);
+check('畸形端口被拒绝', 'ltsToMatchPattern("example.com:abc")', null);
+check('非法 scheme 的原因写进 errors',
+  '(() => { const s = ltsParseSite("ws://example.com"); return [s.pattern, s.errors.length]; })()',
+  ['', 1]);
+check('路径区分大小写（和 Chrome 的 match pattern 一致）',
+  '[ltsPatternToRegExp(ltsToMatchPattern("example.com/Admin")).test("https://example.com/Admin/x"), ltsPatternToRegExp(ltsToMatchPattern("example.com/Admin")).test("https://example.com/ADMIN/x")]',
+  [true, false]);
+check('域名不区分大小写',
+  'ltsPatternToRegExp(ltsToMatchPattern("example.com")).test("https://EXAMPLE.com/x")', true);
 check('非法 scheme → null', 'ltsToMatchPattern("chrome://settings")', null);
 check('match pattern 能命中子域',
   'ltsPatternToRegExp(ltsToMatchPattern("example.com")).test("https://a.b.example.com/x?y=1")', true);
@@ -249,12 +289,18 @@ check('match pattern 不命中相似域名',
 check('路径限制生效',
   'ltsPatternToRegExp(ltsToMatchPattern("example.com/foo")).test("https://example.com/bar")', false);
 check('Accept-Language 生成',
-  'ltsToAcceptLanguage(["ja-JP","ja","en"])', 'ja-JP,ja;q=0.7,en;q=0.3');
+  'ltsToAcceptLanguage(["ja-JP","ja","en"])', 'ja-JP,ja;q=0.9,en;q=0.8');
+check('两个语言时第二个是 q=0.9（不是 0.5）',
+  'ltsToAcceptLanguage(["ja-JP","ja"])', 'ja-JP,ja;q=0.9');
 check('语言串解析（去重 + 过滤非法）',
   'ltsParseLanguages("ja-JP, ja, JA-jp, 中文, en")', ['ja-JP', 'ja', 'en']);
 check('站点行解析（含覆盖）',
-  '(() => { const s = ltsParseSite("example.com | Asia/Tokyo | ja-JP,ja"); return [s.pattern, s.timezone, s.languages, s.domains]; })()',
-  ['*://*.example.com/*', 'Asia/Tokyo', ['ja-JP', 'ja'], ['example.com']]);
+  '(() => { const s = ltsParseSite("example.com | Asia/Tokyo | ja-JP,ja"); return [s.pattern, s.timezone, s.languages, s.domains, s.overridden]; })()',
+  ['*://*.example.com/*', 'Asia/Tokyo', ['ja-JP', 'ja'], ['example.com'], true]);
+check('没有覆盖时 overridden = false',
+  'ltsParseSite("example.com").overridden', false);
+check('第 4 段起会被明确报出来',
+  'ltsParseSite("example.com | UTC | ja | extra").warnings.length', 1);
 check('注释行被忽略', 'ltsParseSite("# 这是注释")', null);
 check('非法时区被标记',
   '(() => { const s = ltsParseSite("example.com | Mars/Olympus"); return [s.timezone, s.errors.length]; })()',

@@ -19,23 +19,38 @@
   const prefs = { timezone: '', languages: [] };
   let prefsEpoch = 0;
 
-  const port = (() => {
-    let p = document.getElementById(PORT_ID);
-    if (!p) {
-      // 极少数情况下 MAIN 可能先于 ISOLATED 执行，这里自建元素，isolated.js 会复用
-      p = document.createElement('span');
-      p.id = PORT_ID;
-      p.setAttribute('aria-hidden', 'true');
-      p.style.setProperty('display', 'none', 'important');
-      const root = document.documentElement || document;
+  let port = document.getElementById(PORT_ID);
+
+  if (!port) {
+    // 极少数情况下 MAIN 可能先于 ISOLATED 执行，这里自建元素，isolated.js 会复用
+    port = document.createElement('span');
+    port.id = PORT_ID;
+    port.setAttribute('aria-hidden', 'true');
+    port.style.setProperty('display', 'none', 'important');
+    const root = document.documentElement || document;
+    try {
+      root.appendChild(port);
+    } catch (e) {
+      // document_start 阶段 documentElement 可能还不存在：
+      // 元素没进 DOM 的话 isolated.js 会另建一个，两边就永远对不上。
+      // 等 DOM 就绪后再找一次真正的端口元素。
       try {
-        root.appendChild(p);
-      } catch (e) {
+        document.addEventListener('DOMContentLoaded', adoptPort, { once: true });
+      } catch (err) {
         /* ignore */
       }
     }
-    return p;
-  })();
+  }
+
+  /** DOM 就绪后如果发现 isolated.js 建了另一个端口元素，就换用它 */
+  function adoptPort() {
+    const found = document.getElementById(PORT_ID);
+    if (!found) return;
+    if (found === port) return;
+    port = found;
+    bindPort();
+    syncPrefs();
+  }
 
   /* ---------------------------------------------------- 时区偏移计算工具 */
 
@@ -97,6 +112,14 @@
   /** 本机时区在时刻 t 的偏移（毫秒，东为正） */
   const nativeOffsetMs = t => -new NativeDate(t).getTimezoneOffset() * 60000;
 
+  /** 本机时区的墙上时间（用 UTC 表示）→ 真实时刻 */
+  const nativeWallToInstant = wallMs => {
+    let t = wallMs - nativeOffsetMs(wallMs);
+    const off2 = nativeOffsetMs(t);
+    if (wallMs - off2 !== t) t = wallMs - off2;
+    return t;
+  };
+
   /** 「目标时区的墙上时间（用 UTC 表示）」→ 真实时刻 */
   const wallToInstant = wallMs => {
     const tz = prefs.timezone;
@@ -117,15 +140,52 @@
     return new NativeDate(t + targetOffsetMs(tz, t) - nativeOffsetMs(t));
   };
 
+  /** target 时区的长名（带缓存，toTimeString 会在热路径上反复要它） */
+  const zoneNameCache = new Map();
+  const zoneName = (timezone, t) => {
+    let f = zoneNameCache.get(timezone);
+    if (f === undefined) {
+      try {
+        f = new NativeDateTimeFormat('en-US', { timeZone: timezone, timeZoneName: 'long' });
+      } catch (e) {
+        f = null;
+      }
+      zoneNameCache.set(timezone, f);
+    }
+    if (!f) return '';
+    try {
+      const found = f.formatToParts(new NativeDate(t)).find(p => p.type === 'timeZoneName');
+      return found ? found.value : '';
+    } catch (e) {
+      return '';
+    }
+  };
+
   /* -------------------------------------------------------- 参数语义判定 */
 
   const RE_ISO_WITH_ZONE = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?(?:[.,]\d+)?(?:[Zz]|[+-]\d{2}:?\d{2})$/;
   const RE_ISO_DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 
-  /** 字符串参数：绝对时间 → 原样；其余（含无时区的 ISO 时间）按本地时间解释 */
+  /* 非 ISO 格式（RFC 2822 / HTTP-date / Date#toString）里的时区标记。
+     只认「时间后面跟 ±hh[:mm] 或 Z」以及常见时区缩写，
+     避免把 2023-10-28 里的 -10 误判成偏移量。 */
+  const RE_TIME_WITH_OFFSET = /\d{1,2}:\d{2}(?::\d{2})?(?:[.,]\d+)?\s*(?:[+-]\d{1,2}(?::?\d{2})?|\bZ\b)/;
+  const RE_ZONE_NAME = /\b(?:GMT|UTC|UT|EST|EDT|CST|CDT|MST|MDT|PST|PDT|AKST|AKDT|HST|CET|CEST|EET|EEST|WET|WEST|BST|IST|JST|KST|AEST|AEDT|ACST|ACDT|NZST|NZDT|MSK|SGT|HKT|AST|ADT|NST|NDT)\b/;
+
+  /** 字符串里是否已写明绝对时区（写明就交给原生解析，不按本地时间重解释） */
+  const hasExplicitZone = s =>
+    RE_ISO_WITH_ZONE.test(s) || RE_ISO_DATE_ONLY.test(s) ||
+    RE_TIME_WITH_OFFSET.test(s) || RE_ZONE_NAME.test(s);
+
+  /**
+   * 字符串参数：已带时区的 → 绝对时间，原样交给原生；
+   * 其余（含无时区的 ISO 时间）→ 按目标时区的本地时间解释。
+   * 之前只认 ISO 带时区写法，于是 "Sat, 28 Oct 2023 03:00:00 GMT"、
+   * new Date().toUTCString() 这类 RFC 2822 / HTTP-date 会被再解释一次，整体偏掉一个时差。
+   */
   const resolveString = str => {
     const s = str.trim();
-    if (RE_ISO_WITH_ZONE.test(s) || RE_ISO_DATE_ONLY.test(s)) return [str];
+    if (hasExplicitZone(s)) return [str];
     const native = new NativeDate(str);
     if (isNaN(native.getTime())) return [str];
     const wallMs = native.getTime() + nativeOffsetMs(native.getTime());
@@ -143,8 +203,8 @@
   /* ------------------------------------------------------------ SpoofDate */
 
   class SpoofDate extends NativeDate {
-    #view;
-    #epoch = -1;
+    #view = null;
+    #viewKey = '';
 
     constructor(...args) {
       if (!prefs.timezone || args.length === 0) {
@@ -159,11 +219,17 @@
       }
     }
 
-    /** 惰性计算的「移位视图」，配置变化时自动失效（不需要跟踪每个实例） */
+    /**
+     * 惰性计算的「移位视图」缓存。
+     * 缓存键用的是「当前时刻 + 配置版本」而不是只有配置版本：
+     * 否则 d.setTime()/setUTCHours() 这类走原生 setter 的修改不会让缓存失效，
+     * 之后的 getHours()/getDate() 会返回改之前的值。
+     */
     #shifted() {
-      if (this.#epoch !== prefsEpoch) {
+      const key = prefsEpoch + '|' + NativeDate.prototype.getTime.call(this);
+      if (this.#viewKey !== key) {
         this.#view = shiftInstance(this);
-        this.#epoch = prefsEpoch;
+        this.#viewKey = key;
       }
       return this.#view;
     }
@@ -184,15 +250,25 @@
     getSeconds() { return this.#shifted().getSeconds(); }
     getYear() { return this.#shifted().getYear(); }
 
-    /* ---- 本地时间 setter（时区相关），按「墙上时间差值」换算回真实时刻 ---- */
+    /* ---- 本地时间 setter（时区相关）：改的是「目标时区的墙上时间」---- */
     #setLocal(name, args) {
-      const view = this.#shifted();
-      const before = NativeDate.prototype.getTime.call(view);
-      const after = NativeDate.prototype[name].apply(view, args);
-      this.#epoch = -1;
+      const t = NativeDate.prototype.getTime.call(this);
+      if (isNaN(t)) return NativeDate.prototype.setTime.call(this, NaN);
+
+      // 把「墙上时间」冻结成一个 UTC 编码的 Date，用 setUTC* 改它：
+      // UTC setter 不掺本机时区/夏令时，改完就是新的墙上时间。
+      const wall = prefs.timezone
+        ? t + targetOffsetMs(prefs.timezone, t)
+        : t + nativeOffsetMs(t);
+      const utcName = 'setUTC' + name.slice(3);
+      const after = NativeDate.prototype[utcName].apply(new NativeDate(wall), args);
+      this.#viewKey = '';
       if (isNaN(after)) return NativeDate.prototype.setTime.call(this, NaN);
-      const own = NativeDate.prototype.getTime.call(this);
-      return NativeDate.prototype.setTime.call(this, own + (after - before));
+
+      // 再换回真实时刻。不能像以前那样只把差值加到旧时刻上：
+      // 跨夏令时切换时目标时区的偏移变了，差值会被重复计入。
+      const next = prefs.timezone ? wallToInstant(after) : nativeWallToInstant(after);
+      return NativeDate.prototype.setTime.call(this, next);
     }
 
     setDate(...args) { return this.#setLocal('setDate', args); }
@@ -201,7 +277,13 @@
     setMinutes(...args) { return this.#setLocal('setMinutes', args); }
     setMonth(...args) { return this.#setLocal('setMonth', args); }
     setSeconds(...args) { return this.#setLocal('setSeconds', args); }
-    setYear(...args) { return this.#setLocal('setYear', args); }
+    setYear(...args) {
+      // 没有 setUTCYear，按规范自己换算：0-99 映射到 1900-1999，其余原样
+      const raw = Number(args[0]);
+      if (isNaN(raw)) return this.#setLocal('setFullYear', [NaN]);
+      const year = raw >= 0 && raw <= 99 ? 1900 + raw : raw;
+      return this.#setLocal('setFullYear', [year]);
+    }
 
     /* ---- 字符串化 ---- */
     toDateString() {
@@ -220,16 +302,7 @@
       const hh = String(Math.floor(abs / 3600000)).padStart(2, '0');
       const mm = String(Math.floor((abs % 3600000) / 60000)).padStart(2, '0');
 
-      const name = (() => {
-        try {
-          const parts = new NativeDateTimeFormat('en-US', { timeZone: tz, timeZoneName: 'long' })
-            .formatToParts(new NativeDate(t));
-          const found = parts.find(p => p.type === 'timeZoneName');
-          return found ? found.value : '';
-        } catch (e) {
-          return '';
-        }
-      })();
+      const name = zoneName(tz, t);
 
       return clock + ' GMT' + sign + hh + mm + (name ? ' (' + name + ')' : '');
     }
@@ -265,6 +338,9 @@
 
   const withTimeZone = options => {
     if (!prefs.timezone) return options;
+    // 原生这边对 null 会抛 TypeError，对非对象参数则是宽松处理；保持原样别自己造对象
+    if (options === undefined) return { timeZone: prefs.timezone };
+    if (options === null || typeof options !== 'object') return options;
     const next = Object.assign({}, options);
     if (!next.timeZone) next.timeZone = prefs.timezone;
     return next;
@@ -294,6 +370,8 @@
   };
 
   const dateTimeFormatDefaults = args => {
+    // null 交给原生去抛（Object.assign({}, null) 会把它变成 {}，把错误吞掉）
+    if (args[1] === null) return;
     args[1] = Object.assign({}, args[1]);
     if (!args[1].timeZone && prefs.timezone) args[1].timeZone = prefs.timezone;
   };
@@ -309,7 +387,7 @@
   const navProto = typeof Navigator === 'function' ? Navigator.prototype : null;
   const navSaved = Object.create(null);
 
-  const patchNavProp = (prop, value) => {
+  const patchNavProp = (prop, getValue) => {
     const targets = navProto ? [navProto, navigator] : [navigator];
     for (const target of targets) {
       let descriptor = null;
@@ -319,7 +397,7 @@
         descriptor = null;
       }
       try {
-        Object.defineProperty(target, prop, { configurable: true, enumerable: true, get: () => value });
+        Object.defineProperty(target, prop, { configurable: true, enumerable: true, get: () => getValue() });
       } catch (e) {
         continue;
       }
@@ -352,8 +430,9 @@
       return;
     }
 
-    patchNavProp('language', lang);
-    patchNavProp('languages', Object.freeze(list.slice()));
+    patchNavProp('language', () => lang);
+    // 原生每次访问都返回一个新数组；返回同一个实例是可检测的指纹差异
+    patchNavProp('languages', () => Object.freeze(list.slice()));
   };
 
   /* ------------------------------------------------------- Number/String */
@@ -394,6 +473,14 @@
     }
   });
 
+  // Date.parse 要和 new Date(str) 给出一致的答案，
+  // 否则 `Date.parse(s) !== new Date(s).getTime()`，很多校验/排序代码会莫名不对。
+  const spoofParse = value => {
+    const text = String(value);
+    const parsed = new SpoofDate(text);
+    return NativeDate.prototype.getTime.call(parsed);
+  };
+
   // 让 `new Date().constructor === Date`、`Date.name`、`Date.length` 看起来和原生一致
   try {
     Object.defineProperty(SpoofDate.prototype, 'constructor', {
@@ -403,6 +490,9 @@
     });
     Object.defineProperty(SpoofDate, 'name', { configurable: true, value: 'Date' });
     Object.defineProperty(SpoofDate, 'length', { configurable: true, value: 7 });
+    Object.defineProperty(spoofParse, 'name', { configurable: true, value: 'parse' });
+    Object.defineProperty(spoofParse, 'length', { configurable: true, value: 1 });
+    Object.defineProperty(SpoofDate, 'parse', { configurable: true, writable: true, value: spoofParse });
   } catch (e) {
     /* ignore */
   }
@@ -442,9 +532,12 @@
     }
   };
 
-  if (port) {
-    port.addEventListener('lts-prefs-change', syncPrefs);
+  /** 端口元素就绪/更换后都走这里（同一个函数引用来监听，重复调用不会叠加） */
+  function bindPort() {
+    if (port) port.addEventListener('lts-prefs-change', syncPrefs);
   }
+
+  bindPort();
 
   // 首次读取（isolated.js 在 document_start 里已先写过，所以这里是同步可得的）
   syncPrefs();
