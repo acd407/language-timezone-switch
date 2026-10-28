@@ -11,7 +11,7 @@
 ─────────────────────────    ────────────────────────────────
 google.com      → Asia/Tokyo  navigator.language  = ja-JP
 amazon.co.jp    → ja-JP       new Date()          = GMT+0900 (Japan Standard Time)
-example.com     → 保持原样     Accept-Language      = ja-JP,ja;q=0.7,en;q=0.3
+example.com     → 保持原样     Accept-Language      = ja-JP,ja;q=0.9,en;q=0.8
 ```
 
 ## 功能
@@ -22,6 +22,10 @@ example.com     → 保持原样     Accept-Language      = ja-JP,ja;q=0.7,en;q=
   偏移按**具体时刻**计算，夏令时正确（不是"存配置那一刻"的固定偏移）。
 - **语言**：`navigator.language` / `navigator.languages`、`Accept-Language` 请求头
   （服务端渲染的站点靠它）、以及 `Intl` / `toLocaleString` 的默认 locale。
+- **语义自洽**：`new Date(str)` 与 `Date.parse(str)` 给出同一个答案；带时区的 RFC 2822 /
+  HTTP-date（`toUTCString()` 的输出）不会被当成"本地时间"再解释一遍；
+  `getHours()` 这类 getter 和 `setHours()` 这类 setter 在 `setTime()` 之后仍然一致，
+  跨夏令时的 setter 也落在正确的时刻上。
 - **实时生效**：改目标时区/语言会立刻推送到已打开的页面；只有增删站点需要刷新。
 - **工具栏徽标 + 弹窗**：一键把当前站点加入/移出列表。
 
@@ -56,6 +60,9 @@ Firefox 里如果在 `about:addons` 的「权限和数据」里关掉了这个�
    ```
 
    也接受 `https://example.com` 这种带 scheme 的写法，以及裸 IP、`file://` 路径。
+   scheme 只有 `http` / `https` / `file` / `*`（`*` 与浏览器一致，只覆盖 http(s)）。
+   端口可以写（`example.com:8080`），但浏览器不允许按端口注入内容脚本，设置页会提示它被忽略。
+   某一行写错了只影响这一行：图标会照样工作，设置页的预览里会标出原因。
 4. 点**保存**，然后刷新已打开的目标页面。
 5. 之后打开列表里的站点，徽标显示 `ON` 即表示已生效。
 
@@ -85,7 +92,9 @@ Firefox 里如果在 `about:addons` 的「权限和数据」里关掉了这个�
         → 页面自己的脚本开始执行
 ```
 
-所以正常路径上页面从第一行代码起看到的就是伪装值；只有极少数情况下（见「已知限制」）会漏一拍。
+理论上页面从第一行代码起看到的就是伪装值；但 `onCommitted` 与 `document_start` 谁先到并没有保证，
+配置又来自异步存储，所以实测中页面**第一段内联脚本**仍可能读到原生值（`make e2e` 会把这种情况打印成
+一条 note），之后的读取都是伪装值。见「已知限制」第一条。
 
 ## 相对 `reference/` 两个项目的改进
 
@@ -94,7 +103,8 @@ Firefox 里如果在 `about:addons` 的「权限和数据」里关掉了这个�
 
 | 项目 | spoof-timezone / languageswitch | 本扩展 |
 | --- | --- | --- |
-| 夏令时 | `getTimezoneOffset()` 返回保存配置时算好的固定值 | 按每个时刻现算，DST 正确 |
+| 夏令时 | `getTimezoneOffset()` 返回保存配置时算好的固定值 | 按每个时刻现算，DST 正确（setter 也不跑偏） |
+| 参数语义 | 只认 ISO 字符串，`Date.parse` 保持原样 | RFC 2822 / HTTP-date 不会被二次解释，`Date.parse` 与 `new Date` 一致 |
 | 内存 | spoof-timezone 为每个 `Date` 实例压一个闭包进数组，页面活得越久涨得越多 | 用 epoch 标记做惰性失效，不登记实例 |
 | `Date()` | 不带 `new` 时返回对象（可被检测） | 按规范返回字符串 |
 | 指纹 | `Date.name === 'SpoofDate'`、`Date.length === 0` | `Date.name === 'Date'`、`length === 7`、`constructor` 指回自己 |
@@ -112,6 +122,12 @@ Firefox 里如果在 `about:addons` 的「权限和数据」里关掉了这个�
   与 `Intl` 的细微矛盾都可能露馅。这个项目是"让网站以为你在别处"，不是反检测工具。
 - **`Accept-Language` 按域名生效**：DNR 条件用 `requestDomains`（含子域），路径级的站点规则只会
   收窄"注入范围"，不会收窄请求头。因为请求头是站点级决定渲染语言的，路径级改写会互相打架。
+  多条规则命中同一个域名时以**列表靠前**的那一行为准（规则优先级按行号递减），与页面注入的取值一致；
+  同一组域名重复写多行只会生效第一行。
+- **端口不参与匹配**：`example.com:8080` 里的端口会被忽略（Chrome 的 match pattern 直接拒绝带端口的
+  写法），注入范围是整个域名。设置页会在该行旁边给出提示。
+- **站点行格式错误是局部的**：内容脚本按站点逐个注册，一行写错（非法 scheme、带账号的 URL、IPv6
+  字面量等）只会让这一行失效，并在设置页的「状态」里报出来，不会影响其它站点。
 - **只管 HTTP(S) 文档与页面 JS**：不会改变 CSS/字体/图片、`User-Agent`、`Sec-CH-*` 等其它信号。
 - **无 tab 归属的请求**：service worker / preload 发出的请求不属于任何标签页，规则按域名照常匹配。
 - **扩展更新后**需要重新加载目标页面。
@@ -120,7 +136,7 @@ Firefox 里如果在 `about:addons` 的「权限和数据」里关掉了这个�
 
 ```bash
 make build      # 生成 dist/site-language-timezone-switch-<version>.{zip,xpi}
-make test       # 69 项：时区/语言伪造逻辑 + 站点解析（vm 沙箱）
+make test       # 91 项：时区/语言伪造逻辑 + 站点解析 + 回归用例（vm 沙箱）
 make e2e        # 真机 E2E：Chromium 加载扩展 + 本地服务器
 make check      # 语法检查 + 冒烟测试 + 打包自检
 make icons      # 重新生成图标

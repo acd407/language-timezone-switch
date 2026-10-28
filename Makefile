@@ -8,7 +8,7 @@ help:
 	@echo "make build    生成 dist/<name>-<version>.{zip,xpi}（两个内容相同）"
 	@echo "make xpi      同 make build（Firefox 用 .xpi 后缀）"
 	@echo "make zip      只生成 .zip（Chrome / Edge）"
-	@echo "make test     冒烟测试（无浏览器，69 项）"
+	@echo "make test     冒烟测试（无浏览器，91 项）"
 	@echo "make e2e      真机 Chromium 端到端测试"
 	@echo "make check    语法检查 + manifest 校验 + 冒烟测试"
 	@echo "make icons    重新生成图标"
