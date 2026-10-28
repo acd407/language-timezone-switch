@@ -1,0 +1,124 @@
+:root {
+  color-scheme: light dark;
+  --bg: #ffffff;
+  --text: #1b1f24;
+  --muted: #6a737d;
+  --line: #e2e5ea;
+  --accent: #1f6feb;
+  --accent-text: #ffffff;
+  --ok: #17803d;
+  --danger: #b42318;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1b1f26;
+    --text: #e6e9ee;
+    --muted: #98a1ad;
+    --line: #2c333d;
+    --accent: #4c8dff;
+    --accent-text: #0b1220;
+    --ok: #4ac26b;
+    --danger: #ff7b72;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  width: 288px;
+  margin: 0;
+  padding: 14px;
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.5 system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--line);
+  flex: none;
+}
+
+.dot.on { background: var(--ok); }
+
+.domain {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.state {
+  margin-bottom: 10px;
+  color: var(--muted);
+}
+
+.state.on { color: var(--ok); }
+
+.kv {
+  display: grid;
+  grid-template-columns: 44px 1fr;
+  gap: 4px 10px;
+  margin: 0 0 12px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.kv dt { color: var(--muted); }
+.kv dd {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  word-break: break-all;
+}
+
+button {
+  width: 100%;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+button:disabled { opacity: 0.55; cursor: default; }
+button:not(:disabled):hover { border-color: var(--accent); }
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+}
+
+.ghost { color: var(--muted); }
+
+.master {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  cursor: pointer;
+}

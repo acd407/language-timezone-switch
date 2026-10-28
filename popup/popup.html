@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>Language &amp; Timezone Switch</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <span class="dot" id="dot"></span>
+    <span class="domain" id="domain">…</span>
+  </header>
+
+  <div class="state" id="state">读取中…</div>
+
+  <dl class="kv" id="kv" hidden>
+    <dt>时区</dt><dd id="tz">—</dd>
+    <dt>语言</dt><dd id="lang">—</dd>
+    <dt>规则</dt><dd id="rule">—</dd>
+  </dl>
+
+  <button id="toggle" class="primary" disabled>…</button>
+
+  <div class="row">
+    <button id="reload" class="ghost">刷新页面</button>
+    <button id="options" class="ghost">设置</button>
+  </div>
+
+  <label class="master">
+    <input type="checkbox" id="enabled">
+    <span>总开关</span>
+  </label>
+
+  <script src="../common.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

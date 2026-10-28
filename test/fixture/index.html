@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>LTS fixture</title>
+  <style>
+    body { font: 14px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; padding: 24px; }
+    dt { color: #666; margin-top: 10px; }
+    dd { margin: 2px 0 0; }
+  </style>
+</head>
+<body>
+<h1>伪造结果</h1>
+<p>把这个页面所在的域名加进扩展的站点列表，然后刷新，与下面的「原始值」对比。</p>
+<dl id="out"></dl>
+
+<script>
+  // 页面自身的第一段脚本：验证 document_start 阶段的同步可用性
+  const early = {
+    'navigator.language (early)': navigator.language,
+    'new Date().getTimezoneOffset() (early)': String(new Date().getTimezoneOffset())
+  };
+
+  const t = Date.UTC(2023, 9, 28, 3, 0); // 2023-10-28T03:00:00Z
+  const rows = Object.assign(early, {
+    'navigator.language': navigator.language,
+    'navigator.languages': JSON.stringify(navigator.languages),
+    'new Date().getTimezoneOffset()': String(new Date().getTimezoneOffset()),
+    'new Date().toString()': String(new Date()),
+    'new Date(2023,9,28,12,0).toISOString()': new Date(2023, 9, 28, 12, 0).toISOString(),
+    'Date.UTC(...) 的本地小时': String(new Date(t).getHours()),
+    'new Date(t).toLocaleString("de-DE")': new Date(t).toLocaleString('de-DE'),
+    'Intl.DateTimeFormat().resolvedOptions().timeZone': new Intl.DateTimeFormat().resolvedOptions().timeZone,
+    'Intl.DateTimeFormat().resolvedOptions().locale': new Intl.DateTimeFormat().resolvedOptions().locale,
+    '(1234.5).toLocaleString()': (1234.5).toLocaleString(),
+    'Date.name / Date.length': Date.name + ' / ' + Date.length,
+    'typeof Date()': typeof Date()
+  });
+
+  const out = document.getElementById('out');
+  for (const [key, value] of Object.entries(rows)) {
+    const dt = document.createElement('dt');
+    dt.textContent = key;
+    const dd = document.createElement('dd');
+    dd.textContent = value;
+    out.append(dt, dd);
+  }
+
+  document.title = 'LTS fixture ' + navigator.language + ' ' + new Date().getTimezoneOffset();
+</script>
+</body>
+</html>

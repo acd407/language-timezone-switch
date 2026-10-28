@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Site Language &amp; Timezone Switch — 设置</title>
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <h1>Site Language &amp; Timezone Switch</h1>
+      <p class="sub">只对下面列表里的网站生效，其它网站保持原样。</p>
+    </div>
+    <label class="switch" title="总开关">
+      <input type="checkbox" id="enabled">
+      <span class="track"><span class="thumb"></span></span>
+      <em id="enabled-label">已启用</em>
+    </label>
+  </header>
+
+  <section>
+    <h2>默认目标</h2>
+
+    <div class="row">
+      <label for="timezone">时区</label>
+      <div class="field">
+        <input id="timezone" list="tz-list" spellcheck="false" autocomplete="off"
+               placeholder="例如 Asia/Tokyo（留空 = 不改时区）">
+        <datalist id="tz-list"></datalist>
+        <p class="hint" id="tz-preview"></p>
+      </div>
+    </div>
+
+    <div class="row">
+      <label for="languages">语言</label>
+      <div class="field">
+        <input id="languages" spellcheck="false" autocomplete="off"
+               placeholder="例如 ja-JP, ja, en（留空 = 不改语言）">
+        <p class="hint" id="lang-preview"></p>
+      </div>
+    </div>
+
+    <div class="row">
+      <label></label>
+      <div class="field">
+        <label class="check">
+          <input type="checkbox" id="rewriteHeader">
+          <span>同时改写 <code>Accept-Language</code> 请求头</span>
+        </label>
+        <p class="hint">服务端渲染的站点（Google、Amazon 等）靠这个头决定返回哪种语言。关闭后只影响页面里的 JS。</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>生效的网站</h2>
+    <p class="hint">
+      每行一个站点，支持三种写法：<code>example.com</code>（含子域）、
+      <code>example.com/path</code>、<code>https://example.com</code>。
+      可在行末用 <code>|</code> 覆盖默认值：<code>站点 | 时区 | 语言</code>。
+    </p>
+    <textarea id="sites" rows="11" spellcheck="false" placeholder="example.com
+google.com | Asia/Tokyo | ja-JP,ja
+amazon.co.jp | Asia/Tokyo | ja-JP,ja
+news.ycombinator.com"></textarea>
+    <ul id="sites-preview" class="preview"></ul>
+    <p class="hint">新增或删除站点后，已经打开的页面需要刷新一次才会生效（时区/语言的改动则会立即推送）。</p>
+  </section>
+
+  <section>
+    <h2>状态</h2>
+    <div id="diagnostics" class="diag">读取中…</div>
+  </section>
+
+  <footer>
+    <button id="save" class="primary">保存</button>
+    <button id="reset" class="ghost">恢复默认</button>
+    <span id="status"></span>
+  </footer>
+</main>
+
+<script src="../common.js"></script>
+<script src="options.js"></script>
+</body>
+</html>

@@ -1,0 +1,24 @@
+# 打包产物
+dist/
+*.zip
+*.xpi
+
+# 依赖与缓存
+node_modules/
+__pycache__/
+*.py[cod]
+.cache/
+
+# 工具/运行时
+.pi/
+
+# 编辑器与系统
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# 注意：reference/（本地参考的第三方源码）不走 .gitignore，
+# 而是放在 .git/info/exclude 里，只对这台机器生效。
